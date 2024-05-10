@@ -88,6 +88,7 @@ fn main() {
 
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         compatible_surface: Some(&surface),
+        power_preference: wgpu::PowerPreference::LowPower,
         ..Default::default()
     }))
     .expect("Failed to find suitable adapter");
