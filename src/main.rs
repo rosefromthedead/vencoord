@@ -14,7 +14,7 @@ use smithay_client_toolkit::{
     },
     shell::{
         wlr_layer::{
-            KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
+            Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
             LayerSurfaceConfigure,
         },
         WaylandSurface,
@@ -61,6 +61,8 @@ fn main() {
         None,
     );
     window.set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
+    window.set_size(0, 0); // ask for size
+    window.set_anchor(Anchor::all()); // required for the above
     window.commit();
 
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
