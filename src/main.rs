@@ -1,3 +1,5 @@
+#![feature(gen_blocks)]
+
 use raw_window_handle::{
     RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
 };
@@ -6,6 +8,7 @@ use smithay_client_toolkit::{
     delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_registry,
     delegate_seat,
     output::{OutputHandler, OutputState},
+    reexports::protocols_wlr::virtual_pointer::v1::client::zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1,
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
     seat::{
@@ -23,9 +26,10 @@ use smithay_client_toolkit::{
 use std::{num::NonZeroUsize, ptr::NonNull, sync::Arc};
 use vello::{
     glyph::{
-        skrifa::{instance::Size, setting::VariationSetting, FontRef, MetadataProvider},
+        skrifa::{FontRef, MetadataProvider},
         Glyph,
     },
+    kurbo::{Affine, Rect},
     peniko::{Blob, Color, Fill, Font},
     AaSupport, RenderParams,
 };
@@ -34,6 +38,8 @@ use wayland_client::{
     protocol::{wl_keyboard::WlKeyboard, wl_output, wl_seat, wl_surface},
     Connection, Proxy, QueueHandle,
 };
+
+mod chars;
 
 fn main() {
     tracing_subscriber::fmt().init();
@@ -51,6 +57,8 @@ fn main() {
     let compositor_state =
         CompositorState::bind(&globals, &qh).expect("wl_compositor not available");
     let layer_shell_state = LayerShell::bind(&globals, &qh).expect("yikes");
+    // let virtual_pointer_manager = globals.bind(&qh, 1..=2, ()).ok();
+    let virtual_pointer_manager = None;
 
     let surface = compositor_state.create_surface(&qh);
     let window = layer_shell_state.create_layer_surface(
@@ -101,6 +109,7 @@ fn main() {
         seat_state: SeatState::new(&globals, &qh),
         output_state: OutputState::new(&globals, &qh),
         keyboard_state: None,
+        virtual_pointer_manager,
 
         exit: false,
         width: 0,
@@ -113,6 +122,8 @@ fn main() {
         queue,
 
         font,
+        gap: 24,
+        string: String::new(),
     };
 
     loop {
@@ -133,6 +144,7 @@ struct Vencoord {
     seat_state: SeatState,
     output_state: OutputState,
     keyboard_state: Option<WlKeyboard>,
+    virtual_pointer_manager: Option<ZwlrVirtualPointerManagerV1>,
 
     exit: bool,
     width: u32,
@@ -145,6 +157,8 @@ struct Vencoord {
     surface: wgpu::Surface<'static>,
 
     font: Font,
+    gap: u32,
+    string: String,
 }
 
 impl CompositorHandler for Vencoord {
@@ -257,33 +271,49 @@ impl LayerShellHandler for Vencoord {
         .expect("whyyy");
         let mut scene = vello::Scene::new();
         let font = FontRef::new(self.font.data.as_ref()).unwrap();
-        let font_size = 12f32;
-        let axes = font.axes();
-        let var_loc = axes.location::<[VariationSetting; 0]>([]);
-        let metrics = font.metrics(Size::new(font_size), &var_loc);
-        let glyph_metrics = font.glyph_metrics(Size::new(font_size), &var_loc);
         let charmap = font.charmap();
-        let mut pen_x = 0f32;
-        let pen_y = metrics.ascent - metrics.descent + metrics.leading;
+        let n_x = self.width / self.gap as u32;
+        let n_y = self.height / self.gap as u32;
+        let mut s = String::new();
+        let glyphs = gen {
+            for x in 0..n_x {
+                for y in 0..n_y {
+                    s.clear();
+                    chars::encode_into(&mut s, x, y);
+                    let mut pen_x = (x * self.gap) as f32;
+                    for c in s.chars() {
+                        let gid = charmap.map(c).unwrap_or_default();
+                        let x = pen_x;
+                        pen_x += 6f32;
+                        yield Glyph {
+                            id: gid.to_u32(),
+                            x,
+                            y: (y * self.gap + 10) as f32,
+                        };
+                    }
+                }
+            }
+        };
+        for x in 0..n_x {
+            for y in 0..n_y {
+                let x = x as f64;
+                let y = y as f64;
+                let gap = self.gap as f64;
+                scene.fill(
+                    Fill::NonZero,
+                    Affine::IDENTITY,
+                    Color::RED,
+                    None,
+                    &Rect::new(x * gap, y * gap, x * gap + 2., y * gap + 2.),
+                );
+            }
+        }
         scene
             .draw_glyphs(&self.font)
             .hint(true)
             .brush(Color::RED)
-            .font_size(font_size)
-            .draw(
-                Fill::NonZero,
-                "hi".chars().map(|c| {
-                    let gid = charmap.map(c).unwrap_or_default();
-                    let advance = glyph_metrics.advance_width(gid).unwrap_or(0f32);
-                    let x = pen_x;
-                    pen_x += advance;
-                    Glyph {
-                        id: gid.to_u32(),
-                        x,
-                        y: pen_y,
-                    }
-                }),
-            );
+            .font_size(10f32)
+            .draw(Fill::NonZero, glyphs);
 
         let surface_texture = surface
             .get_current_texture()
@@ -373,9 +403,17 @@ impl KeyboardHandler for Vencoord {
         _serial: u32,
         event: smithay_client_toolkit::seat::keyboard::KeyEvent,
     ) {
-        match event.keysym {
-            Keysym::Escape => self.exit = true,
-            _ => {}
+        if event.keysym == Keysym::Escape {
+            self.exit = true;
+            return;
+        }
+        self.string.push_str(event.utf8.as_deref().unwrap_or(""));
+        if let Some((x, y)) = chars::decode(&self.string) {
+            let x = x * self.gap;
+            let y = y * self.gap;
+            println!("{x}, {y}");
+            self.exit = true;
+            return;
         }
     }
 

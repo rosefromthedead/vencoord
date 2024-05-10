@@ -1,7 +1,9 @@
+cargo-features = ["edition2024"]
+
 [package]
 name = "vencoord"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 pollster = "0.3.0"
@@ -13,3 +15,6 @@ vello = "0.1.0"
 wayland-backend = { version = "0.3.3", features = ["client_system"] }
 wayland-client = "0.31.1"
 wgpu = "0.19.3"
+
+[dev-dependencies]
+proptest = "1.4.0"
