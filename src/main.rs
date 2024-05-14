@@ -8,11 +8,11 @@ use smithay_client_toolkit::{
     delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_registry,
     delegate_seat,
     output::{OutputHandler, OutputState},
-    reexports::protocols_wlr::virtual_pointer::v1::client::zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1,
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
     seat::{
         keyboard::{KeyboardHandler, Keysym},
+        pointer::BTN_LEFT,
         Capability, SeatHandler, SeatState,
     },
     shell::{
@@ -35,8 +35,15 @@ use vello::{
 };
 use wayland_client::{
     globals::registry_queue_init,
-    protocol::{wl_keyboard::WlKeyboard, wl_output, wl_seat, wl_surface},
-    Connection, Proxy, QueueHandle,
+    protocol::{
+        wl_keyboard::WlKeyboard, wl_output, wl_pointer::ButtonState, wl_region::WlRegion, wl_seat,
+        wl_surface,
+    },
+    Connection, Dispatch, Proxy, QueueHandle,
+};
+use wayland_protocols_wlr::virtual_pointer::v1::client::{
+    zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1,
+    zwlr_virtual_pointer_v1::ZwlrVirtualPointerV1,
 };
 
 mod chars;
@@ -57,10 +64,15 @@ fn main() {
     let compositor_state =
         CompositorState::bind(&globals, &qh).expect("wl_compositor not available");
     let layer_shell_state = LayerShell::bind(&globals, &qh).expect("yikes");
-    // let virtual_pointer_manager = globals.bind(&qh, 1..=2, ()).ok();
-    let virtual_pointer_manager = None;
+    let virtual_pointer = globals
+        .bind::<ZwlrVirtualPointerManagerV1, _, _>(&qh, 1..=2, ())
+        .ok()
+        .map(|manager| manager.create_virtual_pointer(None, &qh, ()));
 
     let surface = compositor_state.create_surface(&qh);
+    let empty_region = compositor_state.wl_compositor().create_region(&qh, ());
+    empty_region.add(0, 0, 0, 0);
+    surface.set_input_region(Some(&empty_region));
     let window = layer_shell_state.create_layer_surface(
         &qh,
         surface.clone(),
@@ -110,7 +122,7 @@ fn main() {
         seat_state: SeatState::new(&globals, &qh),
         output_state: OutputState::new(&globals, &qh),
         keyboard_state: None,
-        virtual_pointer_manager,
+        virtual_pointer,
 
         exit: false,
         width: 0,
@@ -145,7 +157,7 @@ struct Vencoord {
     seat_state: SeatState,
     output_state: OutputState,
     keyboard_state: Option<WlKeyboard>,
-    virtual_pointer_manager: Option<ZwlrVirtualPointerManagerV1>,
+    virtual_pointer: Option<ZwlrVirtualPointerV1>,
 
     exit: bool,
     width: u32,
@@ -398,7 +410,7 @@ impl KeyboardHandler for Vencoord {
 
     fn press_key(
         &mut self,
-        _conn: &Connection,
+        conn: &Connection,
         _qh: &QueueHandle<Self>,
         _keyboard: &wayland_client::protocol::wl_keyboard::WlKeyboard,
         _serial: u32,
@@ -412,9 +424,14 @@ impl KeyboardHandler for Vencoord {
         if let Some((x, y)) = chars::decode(&self.string) {
             let x = x * self.gap;
             let y = y * self.gap;
-            println!("{x}, {y}");
-            self.exit = true;
-            return;
+            if let Some(pointer) = self.virtual_pointer.as_ref() {
+                pointer.motion_absolute(0, x, y, self.width, self.height);
+                pointer.button(0, BTN_LEFT, ButtonState::Pressed);
+                pointer.button(0, BTN_LEFT, ButtonState::Released);
+                pointer.frame();
+                let _ = conn.flush();
+                self.exit = true;
+            }
         }
     }
 
@@ -435,6 +452,43 @@ impl KeyboardHandler for Vencoord {
         _keyboard: &wayland_client::protocol::wl_keyboard::WlKeyboard,
         _serial: u32,
         _modifiers: smithay_client_toolkit::seat::keyboard::Modifiers,
+    ) {
+    }
+}
+
+// why
+impl Dispatch<WlRegion, ()> for Vencoord {
+    fn event(
+        _state: &mut Self,
+        _proxy: &WlRegion,
+        _event: <WlRegion as Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<ZwlrVirtualPointerManagerV1, ()> for Vencoord {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ZwlrVirtualPointerManagerV1,
+        _event: <ZwlrVirtualPointerManagerV1 as Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<ZwlrVirtualPointerV1, ()> for Vencoord {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ZwlrVirtualPointerV1,
+        _event: <ZwlrVirtualPointerV1 as Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
     ) {
     }
 }

@@ -1222,6 +1222,7 @@ dependencies = [
  "vello",
  "wayland-backend",
  "wayland-client",
+ "wayland-protocols-wlr",
  "wgpu",
 ]
 
